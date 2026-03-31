@@ -1,0 +1,9 @@
+# Poznamka pro Apple Silicon:
+# vytvor venv s nativnim arm64 Pythonem, idealne 3.12 nebo 3.13.
+# Rosetta/x86_64 Python na macOS typicky selze na instalaci torch.
+gymnasium>=0.29
+numpy>=1.26
+pygame>=2.5
+stable-baselines3>=2.2
+tensorboard>=2.15
+torch>=2.2

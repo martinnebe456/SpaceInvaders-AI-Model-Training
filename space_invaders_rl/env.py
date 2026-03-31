@@ -1,0 +1,99 @@
+"""Gymnasium wrapper pro Space Invaders."""
+
+import numpy as np
+import pygame
+import gymnasium as gym
+from gymnasium import spaces
+
+from .game import FPS, STATE_VECTOR_SIZE, SpaceInvadersGame
+
+
+class SpaceInvadersEnv(gym.Env):
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": FPS}
+
+    def __init__(
+        self,
+        render_mode=None,
+        max_steps=5000,
+        seed=None,
+        single_level_mode=True,
+    ):
+        super().__init__()
+        if render_mode not in (None, "human", "rgb_array"):
+            raise ValueError(f"Unsupported render mode: {render_mode}")
+
+        self.render_mode = render_mode
+        self.max_steps = max_steps
+        self.single_level_mode = single_level_mode
+        self.steps_in_episode = 0
+        self.action_space = spaces.Discrete(6)
+        self.observation_space = spaces.Box(
+            low=-1.0,
+            high=1.0,
+            shape=(STATE_VECTOR_SIZE,),
+            dtype=np.float32,
+        )
+        self.game = SpaceInvadersGame(
+            human_mode=render_mode == "human",
+            seed=seed,
+            single_level_mode=single_level_mode,
+        )
+
+    def _get_obs(self):
+        return np.asarray(self.game.get_state_vector(), dtype=np.float32)
+
+    def _get_info(self):
+        info = self.game.get_info().copy()
+        info["steps_in_episode"] = self.steps_in_episode
+        return info
+
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
+        self.steps_in_episode = 0
+        game_seed = None if seed is None else int(seed)
+        observation = self.game.reset(seed=game_seed)
+        info = self._get_info()
+
+        if self.render_mode == "human":
+            self.render()
+
+        return np.asarray(observation, dtype=np.float32), info
+
+    def step(self, action):
+        observation, reward, terminated, info = self.game.step(int(action))
+        self.steps_in_episode += 1
+
+        truncated = self.steps_in_episode >= self.max_steps and not terminated
+        info = info.copy()
+        info["steps_in_episode"] = self.steps_in_episode
+        if truncated:
+            info["truncated_by_max_steps"] = True
+
+        if self.render_mode == "human":
+            self.render()
+
+        return (
+            np.asarray(observation, dtype=np.float32),
+            float(reward),
+            bool(terminated),
+            bool(truncated),
+            info,
+        )
+
+    def render(self):
+        self.game._draw()
+
+        if self.render_mode == "human":
+            pygame.event.pump()
+            pygame.display.flip()
+            self.game.clock.tick(self.metadata["render_fps"])
+            return None
+
+        if self.render_mode == "rgb_array":
+            frame = pygame.surfarray.array3d(self.game.screen)
+            return np.transpose(frame, (1, 0, 2))
+
+        return None
+
+    def close(self):
+        self.game.close()

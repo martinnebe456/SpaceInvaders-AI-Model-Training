@@ -1,0 +1,37 @@
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local Python environments
+.venv/
+venv/
+env/
+
+# Python caches and test/tool outputs
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# Local runtime/config artifacts
+.mplconfig/
+*.log
+
+# Training artifacts and local model files
+runs/
+models/
