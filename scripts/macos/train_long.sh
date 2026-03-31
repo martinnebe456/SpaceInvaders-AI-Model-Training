@@ -5,9 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/macos/common.sh
 source "$SCRIPT_DIR/common.sh"
 
+# Load the virtual environment before invoking the training module.
 activate_venv
 ensure_mplconfig
 
+# Every setting can be overridden through environment variables so this script
+# stays easy to customize without editing the file itself.
 TIMESTEPS="${TIMESTEPS:-100000000}"
 TRAIN_MAX_STEPS="${TRAIN_MAX_STEPS:-20000}"
 N_ENVS="${N_ENVS:-10}"
@@ -22,11 +25,13 @@ mkdir -p "$LOG_DIR"
 STAMP="$(date +"%Y%m%d_%H%M%S")"
 LOG_FILE="$LOG_DIR/long_training_${STAMP}.log"
 
-trap 'notify "Space Invaders RL" "Dlouhy trening skoncil chybou. Zkontroluj log ${LOG_FILE}."' ERR
+trap 'notify "Space Invaders RL" "Long training failed. Check log ${LOG_FILE}."' ERR
 
-notify "Space Invaders RL" "Startuji dlouhy navazujici trening na ${TIMESTEPS} kroku."
+notify "Space Invaders RL" "Starting a long resumable training run for ${TIMESTEPS} timesteps."
 
 if [[ "$RESET_REPLAY_BUFFER" == "1" ]]; then
+  # Keep the model weights but intentionally discard old replay memory when
+  # the reward function or environment semantics have changed.
   python -m space_invaders_rl.train \
     --timesteps "$TIMESTEPS" \
     --max-steps "$TRAIN_MAX_STEPS" \
@@ -39,6 +44,8 @@ if [[ "$RESET_REPLAY_BUFFER" == "1" ]]; then
     --reset-replay-buffer \
     2>&1 | tee "$LOG_FILE"
 else
+  # This is the normal path: continue training from the current checkpoint
+  # and keep the replay buffer so learning can build on prior experience.
   python -m space_invaders_rl.train \
     --timesteps "$TIMESTEPS" \
     --max-steps "$TRAIN_MAX_STEPS" \
@@ -51,5 +58,5 @@ else
     2>&1 | tee "$LOG_FILE"
 fi
 
-notify "Space Invaders RL" "Dlouhy trening je hotovy."
-echo "Log ulozen do $LOG_FILE"
+notify "Space Invaders RL" "Long training finished."
+echo "Log saved to $LOG_FILE"

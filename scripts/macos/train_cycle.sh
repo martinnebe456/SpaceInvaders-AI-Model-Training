@@ -5,9 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/macos/common.sh
 source "$SCRIPT_DIR/common.sh"
 
+# Load the local Python environment and keep Matplotlib cache files predictable.
 activate_venv
 ensure_mplconfig
 
+# Environment variables make it easy to tweak the cycle without editing the
+# script, which is useful for both local experimentation and automation.
 TIMESTEPS="${TIMESTEPS:-1000000}"
 TRAIN_MAX_STEPS="${TRAIN_MAX_STEPS:-20000}"
 N_ENVS="${N_ENVS:-6}"
@@ -26,11 +29,13 @@ mkdir -p "$LOG_DIR"
 STAMP="$(date +"%Y%m%d_%H%M%S")"
 LOG_FILE="$LOG_DIR/training_cycle_${STAMP}.log"
 
-trap 'notify "Space Invaders RL" "Skript skoncil chybou. Zkontroluj log ${LOG_FILE}."' ERR
+trap 'notify "Space Invaders RL" "Training cycle failed. Check log ${LOG_FILE}."' ERR
 
-notify "Space Invaders RL" "Startuji navazujici trening na ${TIMESTEPS} kroku."
+notify "Space Invaders RL" "Starting a resumable training run for ${TIMESTEPS} timesteps."
 
 if [[ "$RESET_REPLAY_BUFFER" == "1" ]]; then
+  # Reuse the model weights but intentionally drop replay memory when the
+  # stored experience is no longer trustworthy.
   python -m space_invaders_rl.train \
     --timesteps "$TIMESTEPS" \
     --max-steps "$TRAIN_MAX_STEPS" \
@@ -43,6 +48,8 @@ if [[ "$RESET_REPLAY_BUFFER" == "1" ]]; then
     --reset-replay-buffer \
     2>&1 | tee "$LOG_FILE"
 else
+  # The default path resumes both the model and the replay buffer so repeated
+  # cycle runs keep improving the same agent.
   python -m space_invaders_rl.train \
     --timesteps "$TIMESTEPS" \
     --max-steps "$TRAIN_MAX_STEPS" \
@@ -55,8 +62,9 @@ else
     2>&1 | tee "$LOG_FILE"
 fi
 
-notify "Space Invaders RL" "Trening dokonceny. Spoustim tichou evaluaci."
+notify "Space Invaders RL" "Training finished. Starting silent evaluation."
 
+# Silent evaluation gives a quick numeric snapshot without opening a game window.
 python -m space_invaders_rl.evaluate \
   --model-path "${MODEL_PATH}.zip" \
   --episodes "$SILENT_EVAL_EPISODES" \
@@ -64,8 +72,10 @@ python -m space_invaders_rl.evaluate \
   --render-mode none \
   2>&1 | tee -a "$LOG_FILE"
 
-notify "Space Invaders RL" "Ticha evaluace hotova. Spoustim jednu vizualni hru."
+notify "Space Invaders RL" "Silent evaluation finished. Launching one visual game."
 
+# Human rendering is useful as a final sanity check that the agent's behavior
+# still looks sensible and not only numerically good.
 python -m space_invaders_rl.evaluate \
   --model-path "${MODEL_PATH}.zip" \
   --episodes "$HUMAN_EVAL_EPISODES" \
@@ -74,5 +84,5 @@ python -m space_invaders_rl.evaluate \
   --full-game \
   2>&1 | tee -a "$LOG_FILE"
 
-notify "Space Invaders RL" "Cely treninkovy cyklus je hotovy."
-echo "Log ulozen do $LOG_FILE"
+notify "Space Invaders RL" "The full training cycle is complete."
+echo "Log saved to $LOG_FILE"

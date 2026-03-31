@@ -1,4 +1,4 @@
-"""Inicializace vyvojoveho prostredi po prvnim naklonovani repozitare."""
+"""Bootstrap the local development environment after cloning the repository."""
 
 from __future__ import annotations
 
@@ -19,32 +19,35 @@ MAX_PYTHON = (3, 14)
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse the small set of bootstrap options exposed to platform wrappers."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--platform",
         choices=["macos", "windows"],
         required=True,
-        help="Platforma, pro kterou se ma prostredi pripravit.",
+        help="Target platform for environment setup.",
     )
     parser.add_argument(
         "--recreate-venv",
         action="store_true",
-        help="Smaze existujici .venv a vytvori ji znovu.",
+        help="Delete the existing .venv and create it again from scratch.",
     )
     return parser.parse_args()
 
 
 def fail(message: str) -> None:
+    """Print a user-facing error and exit with a non-zero status."""
     print(f"ERROR: {message}", file=sys.stderr)
     raise SystemExit(1)
 
 
 def ensure_python_version(target_platform: str) -> None:
+    """Reject unsupported Python versions and unsupported platform architectures."""
     version = sys.version_info[:3]
     if version < MIN_PYTHON or version >= MAX_PYTHON:
         fail(
-            "Je potreba Python 3.12 nebo 3.13. "
-            f"Aktualni interpreter je {version[0]}.{version[1]}.{version[2]}."
+            "Python 3.12 or 3.13 is required. "
+            f"The current interpreter is {version[0]}.{version[1]}.{version[2]}."
         )
 
     if target_platform == "macos":
@@ -62,27 +65,29 @@ def ensure_python_version(target_platform: str) -> None:
         python_arch = platform.machine()
         if host_arch == "arm64" and python_arch != "arm64":
             fail(
-                "Na Apple Silicon byl detekovan x86_64/Rosetta Python. "
-                "Pouzij nativni arm64 Python 3.12 nebo 3.13."
+                "An x86_64/Rosetta Python was detected on Apple Silicon. "
+                "Use a native arm64 Python 3.12 or 3.13 build instead."
             )
 
     if target_platform == "windows":
         if platform.architecture()[0] != "64bit":
-            fail("Je potreba 64bit Python. 32bit interpreter neni podporovan.")
+            fail("A 64-bit Python interpreter is required. 32-bit Python is not supported.")
 
 
 def recreate_venv_if_requested(recreate: bool) -> None:
+    """Delete the virtual environment only when the caller explicitly asks for it."""
     if recreate and VENV_DIR.exists():
-        print(f"Mazu existujici virtualni prostredi: {VENV_DIR}")
+        print(f"Removing existing virtual environment: {VENV_DIR}")
         shutil.rmtree(VENV_DIR)
 
 
 def create_venv_if_missing() -> None:
+    """Create .venv once and reuse it on later bootstrap runs."""
     if VENV_DIR.exists():
-        print(f"Pouzivam existujici virtualni prostredi: {VENV_DIR}")
+        print(f"Reusing existing virtual environment: {VENV_DIR}")
         return
 
-    print(f"Vytvarim virtualni prostredi: {VENV_DIR}")
+    print(f"Creating virtual environment: {VENV_DIR}")
     subprocess.run(
         [sys.executable, "-m", "venv", str(VENV_DIR)],
         cwd=ROOT_DIR,
@@ -91,20 +96,23 @@ def create_venv_if_missing() -> None:
 
 
 def venv_python(target_platform: str) -> Path:
+    """Return the Python executable path inside .venv for the given platform."""
     if target_platform == "windows":
         return VENV_DIR / "Scripts" / "python.exe"
     return VENV_DIR / "bin" / "python"
 
 
 def run_checked(command: list[str], env: dict[str, str] | None = None) -> None:
+    """Run a command in the repo root and fail fast if it exits with an error."""
     print("$ " + " ".join(command))
     subprocess.run(command, cwd=ROOT_DIR, env=env, check=True)
 
 
 def install_dependencies(target_platform: str) -> None:
+    """Install the Python dependencies inside the prepared virtual environment."""
     python_bin = venv_python(target_platform)
     if not python_bin.exists():
-        fail(f"V .venv nebyl nalezen Python interpreter: {python_bin}")
+        fail(f"Python was not found inside .venv: {python_bin}")
 
     run_checked([str(python_bin), "-m", "pip", "install", "--upgrade", "pip"])
     run_checked(
@@ -113,6 +121,7 @@ def install_dependencies(target_platform: str) -> None:
 
 
 def ensure_project_dirs() -> None:
+    """Create local-only runtime directories expected by the training scripts."""
     for relative in [
         ".mplconfig",
         "runs/automation",
@@ -125,20 +134,27 @@ def ensure_project_dirs() -> None:
 
 
 def run_sanity_checks(target_platform: str) -> None:
+    """Compile the Python package once to catch syntax errors early."""
     python_bin = venv_python(target_platform)
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["MPLCONFIGDIR"] = str(ROOT_DIR / ".mplconfig")
     run_checked(
-        [str(python_bin), "-m", "py_compile", *sorted(str(p) for p in (ROOT_DIR / "space_invaders_rl").glob("*.py"))],
+        [
+            str(python_bin),
+            "-m",
+            "py_compile",
+            *sorted(str(p) for p in (ROOT_DIR / "space_invaders_rl").glob("*.py")),
+        ],
         env=env,
     )
 
 
 def print_next_steps(target_platform: str) -> None:
+    """Print the most common follow-up commands after a successful bootstrap."""
     print()
-    print("Hotovo. Prostredi je pripravene.")
-    print("Dalsi kroky:")
+    print("Done. The environment is ready.")
+    print("Next steps:")
     if target_platform == "macos":
         print("  1. ./scripts/macos/train_long.sh")
         print("  2. ./scripts/macos/train_cycle.sh")
@@ -150,6 +166,7 @@ def print_next_steps(target_platform: str) -> None:
 
 
 def main() -> None:
+    """Run the full bootstrap sequence from validation to sanity checks."""
     args = parse_args()
     os.chdir(ROOT_DIR)
     ensure_python_version(args.platform)

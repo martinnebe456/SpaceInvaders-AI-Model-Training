@@ -2,9 +2,12 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "Common.ps1")
+# The shared helper script centralizes repo-root, venv, and cache handling.
 Activate-Venv
 Ensure-MplConfig
 
+# Environment variables keep the script reusable for both local use and
+# automation where only a few settings need to change per run.
 $Timesteps = if ($env:TIMESTEPS) { $env:TIMESTEPS } else { "1000000" }
 $TrainMaxSteps = if ($env:TRAIN_MAX_STEPS) { $env:TRAIN_MAX_STEPS } else { "20000" }
 $NEnvs = if ($env:N_ENVS) { $env:N_ENVS } else { "6" }
@@ -23,8 +26,10 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $LogFile = Join-Path $LogDir "training_cycle_$Stamp.log"
 
-Write-Status "Space Invaders RL" "Startuji navazujici trening na $Timesteps kroku."
+Write-Status "Space Invaders RL" "Starting a resumable training run for $Timesteps timesteps."
 
+# Keep the training invocation in one array so it is obvious which settings are
+# passed through from the environment.
 $trainArguments = @(
     "-m", "space_invaders_rl.train",
     "--timesteps", $Timesteps,
@@ -38,19 +43,23 @@ $trainArguments = @(
 )
 
 if ($ResetReplayBuffer -eq "1") {
+    # Reuse the model weights but intentionally start with fresh replay memory.
     $trainArguments += "--reset-replay-buffer"
 }
 
 python @trainArguments 2>&1 | Tee-Object -FilePath $LogFile
 
-Write-Status "Space Invaders RL" "Trening dokonceny. Spoustim tichou evaluaci."
+Write-Status "Space Invaders RL" "Training finished. Starting silent evaluation."
+# Silent evaluation provides a quick numeric checkpoint without opening a window.
 python -m space_invaders_rl.evaluate `
     --model-path "$ModelPath.zip" `
     --episodes $SilentEvalEpisodes `
     --max-steps $SilentEvalMaxSteps `
     --render-mode none 2>&1 | Tee-Object -FilePath $LogFile -Append
 
-Write-Status "Space Invaders RL" "Ticha evaluace hotova. Spoustim jednu vizualni hru."
+Write-Status "Space Invaders RL" "Silent evaluation finished. Launching one visual game."
+# Human rendering is the final sanity check that the agent still behaves well
+# when watched directly.
 python -m space_invaders_rl.evaluate `
     --model-path "$ModelPath.zip" `
     --episodes $HumanEvalEpisodes `
@@ -58,5 +67,5 @@ python -m space_invaders_rl.evaluate `
     --render-mode human `
     --full-game 2>&1 | Tee-Object -FilePath $LogFile -Append
 
-Write-Status "Space Invaders RL" "Cely treninkovy cyklus je hotovy."
-Write-Host "Log ulozen do $LogFile"
+Write-Status "Space Invaders RL" "The full training cycle is complete."
+Write-Host "Log saved to $LogFile"

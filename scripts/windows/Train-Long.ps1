@@ -2,9 +2,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "Common.ps1")
+# The shared helper script centralizes repo-root, venv, and cache handling.
 Activate-Venv
 Ensure-MplConfig
 
+# Environment variables keep the script easy to customize without editing it.
 $Timesteps = if ($env:TIMESTEPS) { $env:TIMESTEPS } else { "100000000" }
 $TrainMaxSteps = if ($env:TRAIN_MAX_STEPS) { $env:TRAIN_MAX_STEPS } else { "20000" }
 $NEnvs = if ($env:N_ENVS) { $env:N_ENVS } else { "10" }
@@ -19,8 +21,9 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $LogFile = Join-Path $LogDir "long_training_$Stamp.log"
 
-Write-Status "Space Invaders RL" "Startuji dlouhy navazujici trening na $Timesteps kroku."
+Write-Status "Space Invaders RL" "Starting a long resumable training run for $Timesteps timesteps."
 
+# Build the argument list once so the command is easy to inspect and extend.
 $arguments = @(
     "-m", "space_invaders_rl.train",
     "--timesteps", $Timesteps,
@@ -34,10 +37,12 @@ $arguments = @(
 )
 
 if ($ResetReplayBuffer -eq "1") {
+    # Keep the model weights but intentionally discard old replay memory when
+    # prior experience should no longer influence training.
     $arguments += "--reset-replay-buffer"
 }
 
 python @arguments 2>&1 | Tee-Object -FilePath $LogFile
 
-Write-Status "Space Invaders RL" "Dlouhy trening je hotovy."
-Write-Host "Log ulozen do $LogFile"
+Write-Status "Space Invaders RL" "Long training finished."
+Write-Host "Log saved to $LogFile"

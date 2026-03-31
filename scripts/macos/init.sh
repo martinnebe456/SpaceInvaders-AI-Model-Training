@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This thin wrapper picks a usable Python interpreter and delegates the real
+# setup work to the cross-platform bootstrap script.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BOOTSTRAP_PY="$REPO_ROOT/scripts/bootstrap/init_env.py"
 
 find_python() {
+  # Respect PYTHON_BIN when the caller wants a specific interpreter, then fall
+  # back to a reasonable search order for common local installs.
   local candidates=()
   if [[ -n "${PYTHON_BIN:-}" ]]; then
     candidates+=("${PYTHON_BIN}")
@@ -25,7 +29,7 @@ find_python() {
 
 PYTHON_CMD="$(find_python || true)"
 if [[ -z "$PYTHON_CMD" ]]; then
-  echo "Python 3.12 nebo 3.13 nebyl nalezen. Nainstaluj ho a spust init znovu." >&2
+  echo "Python 3.12 or 3.13 was not found. Install one of them and run init again." >&2
   exit 1
 fi
 

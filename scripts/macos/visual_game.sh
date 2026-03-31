@@ -5,9 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/macos/common.sh
 source "$SCRIPT_DIR/common.sh"
 
+# Visual playback uses the trained model in human render mode so the user can
+# inspect the agent's behavior directly.
 activate_venv
 ensure_mplconfig
 
+# Keep the knobs overridable for quick experimentation.
 MODEL_PATH="${MODEL_PATH:-models/space_invaders_dqn.zip}"
 EPISODES="${EPISODES:-1}"
 MAX_STEPS="${MAX_STEPS:-50000}"

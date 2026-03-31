@@ -1,11 +1,15 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# This wrapper selects a usable Python interpreter and forwards everything else
+# to the shared bootstrap script.
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $Bootstrap = Join-Path $RepoRoot "scripts\bootstrap\init_env.py"
 
 function Test-PyVersion {
     param([string]$VersionTag)
+    # The Windows py launcher makes version-specific discovery more reliable
+    # than guessing installation paths ourselves.
     & py $VersionTag -c "import sys; print(sys.version)" *> $null
     return ($LASTEXITCODE -eq 0)
 }
@@ -33,4 +37,4 @@ if (Get-Command python -ErrorAction SilentlyContinue) {
     exit $LASTEXITCODE
 }
 
-throw "Python 3.12 nebo 3.13 nebyl nalezen. Nainstaluj ho a spust init znovu."
+throw "Python 3.12 or 3.13 was not found. Install one of them and run init again."
