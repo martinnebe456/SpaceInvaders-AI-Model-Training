@@ -1,4 +1,4 @@
-"""Vyhodnocení natrénovaného DQN agenta pro Space Invaders."""
+"""Evaluate a trained DQN agent on the Space Invaders environment."""
 
 import argparse
 from pathlib import Path
@@ -9,6 +9,7 @@ from .env import SpaceInvadersEnv
 
 
 def parse_args():
+    """Parse CLI options for silent or visual evaluation runs."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model-path",
@@ -27,20 +28,24 @@ def parse_args():
         "--human-max-steps",
         type=int,
         default=20000,
-        help="Doporuceny kratky limit pro vizualni prehrani v human modu.",
+        help="Recommended shorter limit for real-time playback in human mode.",
     )
     parser.add_argument(
         "--full-game",
         action="store_true",
-        help="Nevypina epizodu po prvnim levelu, ale necha model hrat dal.",
+        help="Keep playing past the first cleared level instead of stopping the episode.",
     )
     return parser.parse_args()
 
 
 def main():
+    """Run one evaluation pass and print per-episode and aggregate metrics."""
     args = parse_args()
     render_mode = None if args.render_mode == "none" else args.render_mode
     max_steps = args.max_steps
+
+    # Human rendering runs in real time, so a lower default step limit keeps
+    # visual playback from taking too long when the caller forgets to override it.
     if render_mode == "human" and args.max_steps == 50000:
         max_steps = args.human_max_steps
 
@@ -55,7 +60,7 @@ def main():
     try:
         if render_mode == "human":
             print(
-                f"Human render bezi v realnem case pri 60 FPS, "
+                f"Human rendering runs in real time at 60 FPS, "
                 f"max_steps={max_steps}, full_game={args.full_game}."
             )
 
@@ -70,6 +75,8 @@ def main():
         total_player_bunker_hits = 0
 
         for episode in range(args.episodes):
+            # Use a deterministic but distinct seed per episode so repeated
+            # evaluations are reproducible without replaying the exact same level.
             episode_seed = args.seed + episode
             observation, info = env.reset(seed=episode_seed)
             terminated = False
@@ -82,6 +89,8 @@ def main():
                 episode_reward += reward
 
                 if render_mode == "rgb_array":
+                    # Force frame generation even when the caller is not showing
+                    # a live window, which is useful for recording or debugging.
                     env.render()
 
             total_reward += episode_reward
@@ -104,6 +113,8 @@ def main():
                 f"bunker_hits={info['player_bunker_hits']}"
             )
 
+        # Aggregate metrics make it easier to compare checkpoints than raw
+        # per-episode logs, especially when outcomes are still noisy.
         print(
             f"Summary: mean_reward={total_reward / args.episodes:.2f}, "
             f"mean_score={total_score / args.episodes:.2f}, "

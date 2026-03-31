@@ -1,9 +1,9 @@
 """
-Space Invaders – plná kopie klasické arkádové hry.
+Space Invaders game logic with an RL-friendly state representation.
 
-Struktura je navržena tak, aby stav hry bylo snadné exportovat
-jako vektor čísel pro vstupní vrstvu neuronové sítě (viz metoda
-SpaceInvadersGame.get_state_vector()).
+The same core game can be driven either by keyboard input or by an agent.
+The important design goal is that the current game state can be exported as
+one flat numeric vector for neural-network training.
 """
 
 import math
@@ -11,13 +11,13 @@ import random
 import pygame
 
 # ---------------------------------------------------------------------------
-# Konstanty
+# Constants
 # ---------------------------------------------------------------------------
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 FPS = 60
 
-# Barvy
+# Colors
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
 GREEN = (0, 255, 0)
@@ -27,21 +27,21 @@ CYAN = (0, 255, 255)
 MAGENTA = (255, 0, 255)
 ORANGE = (255, 165, 0)
 
-# Hráč
+# Player
 PLAYER_WIDTH = 48
 PLAYER_HEIGHT = 32
 PLAYER_SPEED = 5
 PLAYER_Y = SCREEN_HEIGHT - 60
 
-# Střely hráče
+# Player bullets
 BULLET_WIDTH = 4
 BULLET_HEIGHT = 12
 BULLET_SPEED = 8
-BULLET_COOLDOWN_MS = 300  # ms
+BULLET_COOLDOWN_MS = 300  # milliseconds
 BULLET_COOLDOWN_FRAMES = max(1, round(BULLET_COOLDOWN_MS * FPS / 1000))
 PLAYER_INVULNERABILITY_FRAMES = 90
 
-# Nepřátelé
+# Enemies
 ENEMY_ROWS = 5
 ENEMY_COLS = 11
 ENEMY_WIDTH = 32
@@ -51,23 +51,23 @@ ENEMY_PADDING_Y = 12
 ENEMY_START_X = 60
 ENEMY_START_Y = 80
 ENEMY_BASE_SPEED = 1.0
-ENEMY_SPEED_INCREASE = 0.15  # rychlost roste s každým zabitým
-ENEMY_DROP = 16  # posun dolů při odrazu od stěny
+ENEMY_SPEED_INCREASE = 0.15  # kept for balancing experiments
+ENEMY_DROP = 16  # pixels the formation drops after hitting a wall
 
-# Střely nepřátel
+# Enemy bullets
 ENEMY_BULLET_WIDTH = 4
 ENEMY_BULLET_HEIGHT = 12
 ENEMY_BULLET_SPEED = 4
-ENEMY_SHOOT_CHANCE = 0.002  # šance na výstřel za frame za sloupec
+ENEMY_SHOOT_CHANCE = 0.002  # per-frame shoot chance for each active column
 
 # Mystery ship
 MYSTERY_WIDTH = 48
 MYSTERY_HEIGHT = 20
 MYSTERY_SPEED = 3
 MYSTERY_SCORES = [50, 100, 150, 300]
-MYSTERY_INTERVAL = 600  # framů mezi mystery ship
+MYSTERY_INTERVAL = 600  # frames between mystery ship spawns
 
-# Bunkry (shields)
+# Bunkers (shields)
 BUNKER_COUNT = 4
 BUNKER_BLOCK_SIZE = 4
 BUNKER_Y = SCREEN_HEIGHT - 140
@@ -75,7 +75,7 @@ MAX_OBS_ENEMY_BULLETS = 8
 MAX_OBS_PLAYER_BULLETS = 3
 MAX_TRACKED_FRAMES = 5000
 
-# Reward shaping pro RL
+# Reward shaping used by the RL step() interface
 STEP_PENALTY = 0.002
 LIFE_LOSS_PENALTY = 5.0
 GAME_OVER_PENALTY = 12.0
@@ -88,36 +88,36 @@ MOVE_TOWARD_CLEAR_SHOT_BONUS = 0.015
 MOVE_AWAY_FROM_CLEAR_SHOT_PENALTY = 0.005
 IDLE_WITH_CLEAR_SHOT_PENALTY = 0.01
 
-# Skóre za řady (od spodní řady nahoru)
+# Score per row, from the bottom row to the top row
 ROW_SCORES = [10, 10, 20, 20, 30]
 
 # ---------------------------------------------------------------------------
-# Pomocné funkce pro vykreslování pixelartových tvarů
+# Helper functions for pixel-art rendering
 # ---------------------------------------------------------------------------
 
 def draw_player(surface, x, y, color=GREEN):
-    """Nakreslí hráčovu loď (klasický tvar kanónu)."""
-    # Tělo
+    """Draw the player cannon using the classic arcade silhouette."""
+    # Main body
     pygame.draw.rect(surface, color, (x + 4, y + 12, 40, 20))
-    # Hlaveň
+    # Barrel
     pygame.draw.rect(surface, color, (x + 20, y, 8, 16))
-    # Podstavec
+    # Base
     pygame.draw.rect(surface, color, (x, y + 24, 48, 8))
 
 
 def draw_enemy_type_a(surface, x, y, color, frame):
-    """Horní řada – malý nepřítel (squid)."""
+    """Draw the small top-row enemy variant."""
     w, h = 24, 18
     ox = x + (ENEMY_WIDTH - w) // 2
     oy = y + (ENEMY_HEIGHT - h) // 2
-    # Tělo
+    # Body
     pygame.draw.rect(surface, color, (ox + 8, oy, 8, 6))
     pygame.draw.rect(surface, color, (ox + 4, oy + 6, 16, 6))
     pygame.draw.rect(surface, color, (ox, oy + 12, 24, 6))
-    # Oči
+    # Eyes
     pygame.draw.rect(surface, BLACK, (ox + 8, oy + 12, 4, 4))
     pygame.draw.rect(surface, BLACK, (ox + 14, oy + 12, 4, 4))
-    # Nožky
+    # Toggle the feet position to emulate the original two-frame animation.
     if frame == 0:
         pygame.draw.rect(surface, color, (ox + 2, oy + 18, 4, 4))
         pygame.draw.rect(surface, color, (ox + 18, oy + 18, 4, 4))
@@ -127,17 +127,17 @@ def draw_enemy_type_a(surface, x, y, color, frame):
 
 
 def draw_enemy_type_b(surface, x, y, color, frame):
-    """Střední řady – střední nepřítel (crab)."""
+    """Draw the middle enemy variant used by the center rows."""
     w, h = 28, 20
     ox = x + (ENEMY_WIDTH - w) // 2
     oy = y + (ENEMY_HEIGHT - h) // 2
-    # Tělo
+    # Body
     pygame.draw.rect(surface, color, (ox + 4, oy, 20, 8))
     pygame.draw.rect(surface, color, (ox, oy + 8, 28, 8))
-    # Oči
+    # Eyes
     pygame.draw.rect(surface, BLACK, (ox + 6, oy + 8, 4, 4))
     pygame.draw.rect(surface, BLACK, (ox + 18, oy + 8, 4, 4))
-    # Spodek
+    # Lower body
     pygame.draw.rect(surface, color, (ox + 4, oy + 16, 8, 4))
     pygame.draw.rect(surface, color, (ox + 16, oy + 16, 8, 4))
     if frame == 0:
@@ -149,7 +149,7 @@ def draw_enemy_type_b(surface, x, y, color, frame):
 
 
 def draw_enemy_type_c(surface, x, y, color, frame):
-    """Spodní řady – velký nepřítel (octopus)."""
+    """Draw the large enemy variant used by the bottom rows."""
     w, h = 24, 18
     ox = x + (ENEMY_WIDTH - w) // 2
     oy = y + (ENEMY_HEIGHT - h) // 2
@@ -173,22 +173,22 @@ ENEMY_COLORS = [WHITE, WHITE, CYAN, CYAN, MAGENTA]
 
 
 def create_bunker_shape():
-    """Vrátí 2D pole (mřížku) tvaru bunkru."""
-    # Klasický tvar bunkru – oblouk nahoře, výřez dole uprostřed
+    """Return a 2D mask describing the default bunker shape."""
+    # The mask keeps the classic arch on top and a notch in the center bottom.
     cols = 22
     rows = 16
     shape = []
     for r in range(rows):
         row = []
         for c in range(cols):
-            # Horní oblouk
+            # Carve the rounded top edge.
             cx = cols / 2
             cy = 4
             dist = math.sqrt((c - cx) ** 2 + (r - cy) ** 2)
             if r < 4 and dist > 10:
                 row.append(0)
             elif r >= 12 and 8 <= c <= 13:
-                # Výřez dole
+                # Leave a firing opening below the bunker.
                 row.append(0)
             else:
                 row.append(1)
@@ -210,7 +210,7 @@ STATE_VECTOR_SIZE = (
 
 
 # ---------------------------------------------------------------------------
-# Herní třídy
+# Game objects
 # ---------------------------------------------------------------------------
 
 class Player:
@@ -282,10 +282,10 @@ class Enemy:
 class EnemyFormation:
     def __init__(self):
         self.enemies = []
-        self.direction = 1  # 1 = doprava, -1 = doleva
+        self.direction = 1  # 1 = moving right, -1 = moving left
         self.speed = ENEMY_BASE_SPEED
         self.move_timer = 0
-        self.move_interval = 40  # framů mezi pohyby
+        self.move_interval = 40  # frames between formation moves
         self.anim_frame = 0
         self._create_formation()
 
@@ -309,7 +309,7 @@ class EnemyFormation:
         if not alive:
             return
 
-        # Dynamická rychlost – čím méně nepřátel, tím rychleji
+        # The classic game speeds up as the formation thins out.
         total = ENEMY_ROWS * ENEMY_COLS
         killed = total - len(alive)
         self.move_interval = max(2, 40 - killed)
@@ -318,7 +318,7 @@ class EnemyFormation:
             self.move_timer = 0
             self.anim_frame = 1 - self.anim_frame
 
-            # Zkontroluj, jestli formace narazí na stěnu
+            # Decide whether the next horizontal step would hit a screen edge.
             should_drop = False
             for e in alive:
                 next_x = e.x + self.direction * self.speed
@@ -335,7 +335,7 @@ class EnemyFormation:
                     e.x += self.direction * self.speed
 
     def get_bottom_enemies(self):
-        """Vrátí nejnižšího živého nepřítele v každém sloupci."""
+        """Return the lowest living enemy in each column."""
         columns = {}
         for e in self.enemies:
             if e.alive:
@@ -425,7 +425,7 @@ class Bunker:
         return hit
 
     def damage_area(self, cx, cy, radius=8):
-        """Odstraní bloky v okruhu kolem bodu – pro explozi."""
+        """Remove blocks around an impact point to create a rough explosion hole."""
         self.blocks = [b for b in self.blocks
                        if math.sqrt((b.centerx - cx) ** 2 +
                                     (b.centery - cy) ** 2) > radius]
@@ -436,13 +436,15 @@ class Bunker:
 
 
 # ---------------------------------------------------------------------------
-# Hlavní herní třída
+# Main game class
 # ---------------------------------------------------------------------------
 
 class SpaceInvadersGame:
     """
-    Hlavní třída hry. Může být ovládána klávesnicí (human mode)
-    nebo programově přes metodu step() pro AI/neuronovou síť.
+    Own the full game state for both human play and RL training.
+
+    Human mode creates a real window and runs the keyboard loop. Headless mode
+    renders into an off-screen surface and exposes step() for agent control.
     """
 
     def __init__(self, human_mode=True, seed=None, single_level_mode=False):
@@ -455,6 +457,8 @@ class SpaceInvadersGame:
             if not pygame.get_init():
                 pygame.init()
         else:
+            # In headless training we only need font support. Avoiding full
+            # pygame.init() keeps subprocess workers away from GUI setup.
             if not pygame.font.get_init():
                 pygame.font.init()
 
@@ -462,7 +466,7 @@ class SpaceInvadersGame:
             self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
             pygame.display.set_caption("Space Invaders")
         else:
-            # Headless mode pro trénink AI
+            # Headless mode still draws into a surface so rendering code stays shared.
             self.screen = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("monospace", 20)
@@ -476,7 +480,7 @@ class SpaceInvadersGame:
         return seed
 
     def reset(self, seed=None):
-        """Resetuje hru na počáteční stav. Vrátí state vector."""
+        """Reset the game to its initial state and return the first observation."""
         if seed is not None:
             self.seed(seed)
         self.player = Player()
@@ -511,22 +515,17 @@ class SpaceInvadersGame:
         return bunkers
 
     # -------------------------------------------------------------------
-    # AI / Neuronová síť rozhraní
+    # AI / neural network interface
     # -------------------------------------------------------------------
 
     def get_state_vector(self):
         """
-        Vrátí stav hry jako plochý seznam čísel (floats) pro vstup
-        do neuronové sítě.
+        Return the current state as one flat float vector.
 
-        Vektor je z většiny normalizovaný do intervalu 0..1 a obsahuje:
-        - informace o hráči včetně cooldownu střelby
-        - stav celé formace nepřátel
-        - mystery ship
-        - fixní počet slotů pro střely nepřátel a hráče
-        - stav bunkrů
-
-        Celková velikost vektoru je STATE_VECTOR_SIZE.
+        Most values are normalized to 0..1. The vector includes player state,
+        formation state, the mystery ship, a fixed number of projectile slots,
+        and bunker health. A fixed layout is important so the agent always sees
+        the same observation shape.
         """
         state = []
         cooldown_remaining = max(
@@ -535,7 +534,7 @@ class SpaceInvadersGame:
             - (self.frame_count - self.player.last_shot_frame),
         )
 
-        # Hráč
+        # Player state
         state.append(self.player.x / SCREEN_WIDTH)
         state.append(self.lives / 3.0)
         state.append(min(self.score / 10000.0, 1.0))
@@ -544,7 +543,8 @@ class SpaceInvadersGame:
         state.append(self.death_timer / PLAYER_INVULNERABILITY_FRAMES)
         state.append(min(self.frame_count / MAX_TRACKED_FRAMES, 1.0))
 
-        # Nepřátelé – stav, pozice
+        # Encode each enemy in a stable order so the network can learn column
+        # and row structure instead of seeing a shuffled list every frame.
         for e in self.formation.enemies:
             state.append(1.0 if e.alive else 0.0)
         for e in self.formation.enemies:
@@ -552,7 +552,7 @@ class SpaceInvadersGame:
         for e in self.formation.enemies:
             state.append(e.y / SCREEN_HEIGHT)
 
-        # Formace
+        # Formation
         state.append(1.0 if self.formation.direction > 0 else 0.0)
 
         # Mystery ship
@@ -560,7 +560,8 @@ class SpaceInvadersGame:
         state.append(self.mystery.x / SCREEN_WIDTH if self.mystery.active
                      else 0.0)
 
-        # Střely nepřátel (fixní počet slotů, seřazené od nejnižší střely)
+        # Track the most urgent enemy bullets first: the lowest ones are the
+        # closest threats to the player.
         tracked_enemy_bullets = sorted(
             self.enemy_bullets,
             key=lambda b: (-b.y, abs(b.x - self.player.x)),
@@ -574,7 +575,8 @@ class SpaceInvadersGame:
                 state.append(0.0)
                 state.append(0.0)
 
-        # Střely hráče (fixní počet slotů, seřazené od nejvýš letící)
+        # Track player bullets from top to bottom because higher bullets are
+        # closer to resolving into a hit or a miss.
         tracked_player_bullets = sorted(self.player_bullets, key=lambda b: b.y)
         for i in range(MAX_OBS_PLAYER_BULLETS):
             if i < len(tracked_player_bullets):
@@ -585,7 +587,7 @@ class SpaceInvadersGame:
                 state.append(0.0)
                 state.append(0.0)
 
-        # Bunkry
+        # Bunkers
         for bunker in self.bunkers:
             state.append(len(bunker.blocks) / BUNKER_MAX_BLOCKS)
 
@@ -610,27 +612,30 @@ class SpaceInvadersGame:
 
     def step(self, action):
         """
-        Provede jeden krok hry s danou akcí.
+        Advance the game by one agent action.
 
-        Akce (int):
-            0 = nic
-            1 = doleva
-            2 = doprava
-            3 = střelba
-            4 = doleva + střelba
-            5 = doprava + střelba
+        Action mapping:
+            0 = idle
+            1 = move left
+            2 = move right
+            3 = shoot
+            4 = move left + shoot
+            5 = move right + shoot
 
-        Vrátí: (state_vector, reward, done, info)
+        Return: (state_vector, reward, done, info)
         """
         self.frame_count += 1
         self.reward_adjustment = 0.0
+
+        # Snapshot the previous frame so the reward can measure improvement
+        # instead of relying on absolute values only.
         old_score = self.score
         old_lives = self.lives
         old_bullet_x = self._get_player_bullet_x()
         had_clear_shot = self._has_clear_shot_from_position(old_bullet_x)
         nearest_clear_lane = self._get_nearest_clear_shot_x(old_bullet_x)
 
-        # Převod akce na vstupy
+        # Translate the compact discrete action into movement and shooting flags.
         move = 0
         shoot = False
         if action == 1:
@@ -646,7 +651,7 @@ class SpaceInvadersGame:
             move = 1
             shoot = True
 
-        # Pohyb hráče
+        # Reward movement only when it helps line up a currently blocked shot.
         if move != 0:
             self.player.move(move)
             self._reward_movement_toward_clear_shot(
@@ -660,11 +665,11 @@ class SpaceInvadersGame:
         else:
             self._apply_idle_clear_shot_penalty(True)
 
-        # Střelba
+        # Fire after movement so combined actions use the new lane immediately.
         if shoot:
             self._try_player_shoot()
 
-        # Aktualizace herních objektů
+        # Run one full game-tick worth of simulation.
         self._update_bullets()
         self.formation.update()
         self.mystery.update()
@@ -673,7 +678,8 @@ class SpaceInvadersGame:
         self._tick_timers()
         self._check_win_lose()
 
-        # Reward
+        # Score delta is the primary signal. Small shaped terms help the agent
+        # discover useful behavior before it consistently wins levels.
         reward = (self.score - old_score) / 10.0
         reward -= STEP_PENALTY
         reward += self.reward_adjustment
@@ -688,13 +694,15 @@ class SpaceInvadersGame:
         return self.get_state_vector(), reward, done, self.get_info()
 
     # -------------------------------------------------------------------
-    # Herní logika
+    # Game logic
     # -------------------------------------------------------------------
 
     def _update_bullets(self):
         for b in self.player_bullets:
             b.update()
             if not b.active and not b.hit_target:
+                # A player bullet that leaves the screen without hitting
+                # anything is treated as a wasted shot.
                 self.reward_adjustment -= PLAYER_MISSED_SHOT_PENALTY
                 self.player_shots_missed += 1
         for b in self.enemy_bullets:
@@ -703,6 +711,8 @@ class SpaceInvadersGame:
         self.enemy_bullets = [b for b in self.enemy_bullets if b.active]
 
     def _enemy_shoot(self):
+        # Only the lowest living enemy in each column can shoot, matching the
+        # original arcade rules and preventing bullets from spawning inside allies.
         bottom = self.formation.get_bottom_enemies()
         for e in bottom:
             if self.rng.random() < self.enemy_shoot_chance:
@@ -714,7 +724,7 @@ class SpaceInvadersGame:
                            color=YELLOW, owner="enemy"))
 
     def _check_collisions(self):
-        # Střely hráče vs nepřátelé
+        # Player bullets vs enemies
         for b in self.player_bullets:
             if not b.active:
                 continue
@@ -728,7 +738,7 @@ class SpaceInvadersGame:
                         (str(e.score), e.x, e.y, 30))
                     break
 
-        # Střely hráče vs mystery ship
+        # Player bullets vs mystery ship
         if self.mystery.active:
             for b in self.player_bullets:
                 if not b.active:
@@ -743,7 +753,7 @@ class SpaceInvadersGame:
                     self.mystery.active = False
                     break
 
-        # Střely nepřátel vs hráč
+        # Enemy bullets vs player
         if self.death_timer <= 0:
             for b in self.enemy_bullets:
                 if not b.active:
@@ -754,7 +764,7 @@ class SpaceInvadersGame:
                     self.death_timer = PLAYER_INVULNERABILITY_FRAMES
                     break
 
-        # Střely vs bunkry
+        # Bullets vs bunkers
         for bunker in self.bunkers:
             for b in self.player_bullets + self.enemy_bullets:
                 if not b.active:
@@ -763,11 +773,13 @@ class SpaceInvadersGame:
                     bunker.damage_area(b.x + b.width // 2,
                                        b.y + b.height // 2)
                     b.active = False
+                    # Predicted bunker hits were already penalized on fire.
+                    # This branch catches unexpected bunker collisions after movement.
                     if b.owner == "player" and not b.predicted_bunker_hit:
                         self.reward_adjustment -= PLAYER_BUNKER_HIT_PENALTY
                         self.player_bunker_hits += 1
 
-        # Nepřátelé vs bunkry (dotyk)
+        # Enemies touching a bunker chew through a larger area than bullets do.
         for bunker in self.bunkers:
             for e in self.formation.alive_enemies():
                 if e.rect.colliderect(
@@ -777,7 +789,7 @@ class SpaceInvadersGame:
                     bunker.damage_area(e.x + ENEMY_WIDTH // 2,
                                        e.y + ENEMY_HEIGHT // 2, radius=20)
 
-        # Vyčištění neaktivních střel
+        # Remove bullets that were deactivated by a collision this frame.
         self.player_bullets = [b for b in self.player_bullets if b.active]
         self.enemy_bullets = [b for b in self.enemy_bullets if b.active]
 
@@ -789,10 +801,13 @@ class SpaceInvadersGame:
         by = self.player.y
         bullet = Bullet(bx, by, -BULLET_SPEED, color=GREEN, owner="player")
         if self._shot_path_hits_bunker(bx):
+            # Mark obviously blocked shots up front so the agent learns that
+            # firing into its own bunker is different from a clean lane shot.
             bullet.predicted_bunker_hit = True
             self.reward_adjustment -= PLAYER_BLOCKED_SHOT_PENALTY
             self.player_blocked_shots += 1
         elif self._shot_path_has_target(bx):
+            # A clear lane with an enemy or mystery ship above is slightly encouraged.
             self.reward_adjustment += PLAYER_TARGETED_SHOT_BONUS
             self.player_targeted_shots += 1
 
@@ -837,6 +852,7 @@ class SpaceInvadersGame:
         if not candidate_xs:
             return None
 
+        # Use the closest valid firing lane as the movement shaping target.
         return min(candidate_xs, key=lambda x: abs(x - current_bullet_x))
 
     def _reward_movement_toward_clear_shot(
@@ -867,10 +883,14 @@ class SpaceInvadersGame:
         if self.player_bullets:
             return
 
+        # Penalize hesitation only when the player is ready to shoot and already
+        # has a clean lane. This avoids pushing random spam during cooldowns.
         if self._has_clear_shot_from_position(self._get_player_bullet_x()):
             self.reward_adjustment -= IDLE_WITH_CLEAR_SHOT_PENALTY
 
     def _shot_path_hits_bunker(self, bullet_x):
+        # Model a full vertical shot lane from the player upward to answer
+        # "would this shot be blocked immediately?" without firing first.
         shot_lane = pygame.Rect(bullet_x, 0, BULLET_WIDTH, self.player.y)
         for bunker in self.bunkers:
             for block in bunker.blocks:
@@ -882,6 +902,8 @@ class SpaceInvadersGame:
         bullet_left = bullet_x
         bullet_right = bullet_x + BULLET_WIDTH
 
+        # A target is considered hittable when its horizontal span overlaps
+        # the vertical shot lane.
         for enemy in self.formation.enemies:
             if enemy.alive and enemy.rect.right >= bullet_left:
                 if enemy.rect.left <= bullet_right:
@@ -898,17 +920,17 @@ class SpaceInvadersGame:
             self.death_timer -= 1
 
     def _check_win_lose(self):
-        # Hráč ztratil všechny životy
+        # The player has no lives left.
         if self.lives <= 0:
             self.game_over = True
             return
 
-        # Nepřátelé dosáhli úrovně hráče
+        # The formation has reached the player line.
         if self.formation.lowest_y() >= PLAYER_Y:
             self.game_over = True
             return
 
-        # Všichni nepřátelé zničeni – další level
+        # Clearing the formation either ends the episode or starts the next level.
         if self.formation.alive_count() == 0:
             if self.single_level_mode:
                 self.victory = True
@@ -921,36 +943,37 @@ class SpaceInvadersGame:
         self.player_bullets.clear()
         self.enemy_bullets.clear()
         self.mystery = MysteryShip(self.rng)
+        # Difficulty ramps up by increasing the enemy firing chance each level.
         self.enemy_shoot_chance = min(0.008, ENEMY_SHOOT_CHANCE + self.level * 0.001)
 
     # -------------------------------------------------------------------
-    # Vykreslování
+    # Rendering
     # -------------------------------------------------------------------
 
     def _draw(self):
         self.screen.fill(BLACK)
 
-        # Bunkry
+        # Bunkers
         for bunker in self.bunkers:
             bunker.draw(self.screen)
 
-        # Hráč (bliká při zásahu)
+        # Flash the player briefly after a hit to show invulnerability frames.
         if self.death_timer <= 0 or self.death_timer % 6 < 3:
             self.player.draw(self.screen)
 
-        # Nepřátelé
+        # Enemies
         self.formation.draw(self.screen)
 
         # Mystery ship
         self.mystery.draw(self.screen)
 
-        # Střely
+        # Bullets
         for b in self.player_bullets:
             b.draw(self.screen)
         for b in self.enemy_bullets:
             b.draw(self.screen)
 
-        # Score popups
+        # Floating score popups fade out over a fixed number of frames.
         new_popups = []
         for text, x, y, timer in self.score_popups:
             if timer > 0:
@@ -969,12 +992,12 @@ class SpaceInvadersGame:
         level_text = self.font.render(f"LEVEL: {self.level}", True, CYAN)
         self.screen.blit(level_text, (SCREEN_WIDTH // 2 - 50, 10))
 
-        # Čára na spodku
+        # Ground line
         pygame.draw.line(self.screen, GREEN,
                          (0, SCREEN_HEIGHT - 30),
                          (SCREEN_WIDTH, SCREEN_HEIGHT - 30), 2)
 
-        # Ikony životů
+        # Life icons
         for i in range(self.lives - 1):
             draw_player(self.screen,
                         SCREEN_WIDTH - 140 + i * 50,
@@ -1026,7 +1049,7 @@ class SpaceInvadersGame:
             self.screen.blit(t, r)
             y += 28
 
-        # Ukázkový nepřítel s body
+        # Show one sample sprite for each score tier.
         demo_enemies = [
             (draw_enemy_type_a, MAGENTA, "= 30 PTS"),
             (draw_enemy_type_b, CYAN, "= 20 PTS"),
@@ -1050,11 +1073,11 @@ class SpaceInvadersGame:
         self.screen.blit(start, sr)
 
     # -------------------------------------------------------------------
-    # Hlavní herní smyčka (pro lidského hráče)
+    # Main loop for human play
     # -------------------------------------------------------------------
 
     def run(self):
-        """Spustí hru s ovládáním klávesnicí."""
+        """Run the interactive keyboard-controlled game loop."""
         state = "start"  # start, playing, paused, game_over
         running = True
 
@@ -1099,7 +1122,7 @@ class SpaceInvadersGame:
 
             elif state == "paused":
                 self._draw()
-                # Zobrazení textu pauzy
+                # Draw the pause banner on top of the current frame.
                 pause_text = self.big_font.render("PAUSED", True, YELLOW)
                 pr = pause_text.get_rect(
                     center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
@@ -1115,21 +1138,21 @@ class SpaceInvadersGame:
         pygame.quit()
 
     def _game_tick(self):
-        """Jeden frame herní logiky při lidském ovládání."""
+        """Advance one frame of game logic for keyboard-controlled play."""
         self.frame_count += 1
         keys = pygame.key.get_pressed()
 
-        # Pohyb
+        # Movement
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
             self.player.move(-1)
         if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
             self.player.move(1)
 
-        # Střelba
+        # Shooting
         if keys[pygame.K_SPACE]:
             self._try_player_shoot()
 
-        # Aktualizace
+        # Regular world update
         self._update_bullets()
         self.formation.update()
         self.mystery.update()
@@ -1143,7 +1166,7 @@ class SpaceInvadersGame:
 
 
 # ---------------------------------------------------------------------------
-# Spuštění
+# Entrypoint
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":

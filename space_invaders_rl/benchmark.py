@@ -1,4 +1,4 @@
-"""Benchmark ruznych treningovych konfiguraci pro Space Invaders RL."""
+"""Benchmark different training configurations for Space Invaders RL."""
 
 import argparse
 import os
@@ -17,6 +17,7 @@ FPS_PATTERN = re.compile(r"\|\s+fps\s+\|\s+([0-9.]+)\s+\|")
 
 @dataclass
 class RunResult:
+    """Store the measured outcome of one benchmarked training run."""
     n_envs: int
     repeat: int
     elapsed_seconds: float
@@ -28,31 +29,32 @@ class RunResult:
 
 
 def parse_args():
+    """Parse CLI options for isolated training-speed benchmark runs."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--configs",
         type=int,
         nargs="+",
         default=[1, 4, 6, 8, 10],
-        help="Seznam hodnot n_envs, ktere se maji otestovat.",
+        help="List of n_envs values to benchmark.",
     )
     parser.add_argument(
         "--timesteps",
         type=int,
         default=80_000,
-        help="Kolik kroku ma trvat jeden mereny beh.",
+        help="Number of timesteps for each measured run.",
     )
     parser.add_argument(
         "--repeats",
         type=int,
         default=2,
-        help="Kolikrat zopakovat kazdou konfiguraci.",
+        help="How many times to repeat each configuration.",
     )
     parser.add_argument(
         "--max-steps",
         type=int,
         default=20_000,
-        help="Limit kroku jedne epizody behem benchmarku.",
+        help="Maximum number of steps per episode during the benchmark.",
     )
     parser.add_argument(
         "--vec-env",
@@ -74,25 +76,25 @@ def parse_args():
         "--cooldown-seconds",
         type=int,
         default=12,
-        help="Pauza mezi behy, aby si stroj trochu oddechl.",
+        help="Pause between runs so the machine can cool down a bit.",
     )
     parser.add_argument(
         "--max-load-ratio",
         type=float,
         default=0.75,
-        help="Pokud je 1m loadavg / pocet CPU nad timto prahem, benchmark pocka.",
+        help="If 1-minute loadavg / CPU count is above this threshold, wait before running.",
     )
     parser.add_argument(
         "--wait-seconds",
         type=int,
         default=20,
-        help="Jak dlouho cekat mezi kontrolami zatizeni.",
+        help="How long to wait between load checks.",
     )
     parser.add_argument(
         "--max-waits",
         type=int,
         default=6,
-        help="Kolikrat maximalne cekat na uvolneni systemu.",
+        help="Maximum number of times to wait for the system load to drop.",
     )
     parser.add_argument(
         "--benchmark-dir",
@@ -102,16 +104,18 @@ def parse_args():
     parser.add_argument(
         "--keep-artifacts",
         action="store_true",
-        help="Ponecha docasne modely a replay buffery z benchmarku.",
+        help="Keep the temporary models and replay buffers produced by the benchmark.",
     )
     return parser.parse_args()
 
 
 def cpu_count() -> int:
+    """Return the number of logical CPUs, defaulting to 1 if unknown."""
     return os.cpu_count() or 1
 
 
 def get_loadavg() -> tuple[float, float, float]:
+    """Return the OS load average when supported, otherwise zeros."""
     if not hasattr(os, "getloadavg"):
         return (0.0, 0.0, 0.0)
 
@@ -122,10 +126,12 @@ def get_loadavg() -> tuple[float, float, float]:
 
 
 def load_ratio(load: tuple[float, float, float]) -> float:
+    """Normalize the 1-minute load average by the number of CPU cores."""
     return load[0] / cpu_count()
 
 
 def wait_for_reasonable_load(args) -> tuple[float, float, float]:
+    """Delay the benchmark if the machine is already busy with other work."""
     current_load = get_loadavg()
     if current_load == (0.0, 0.0, 0.0):
         return current_load
@@ -134,9 +140,9 @@ def wait_for_reasonable_load(args) -> tuple[float, float, float]:
     while load_ratio(current_load) > args.max_load_ratio and attempts < args.max_waits:
         ratio = load_ratio(current_load)
         print(
-            "System je aktualne dost vytizeny: "
+            "The system is currently fairly busy: "
             f"load1={current_load[0]:.2f}, ratio={ratio:.2f}. "
-            f"Cekam {args.wait_seconds}s..."
+            f"Waiting {args.wait_seconds}s..."
         )
         time.sleep(args.wait_seconds)
         current_load = get_loadavg()
@@ -151,8 +157,11 @@ def benchmark_command(
     n_envs: int,
     repeat: int,
 ) -> list[str]:
+    """Build the exact training command used for one isolated benchmark run."""
     vec_env = args.vec_env
     if vec_env == "auto":
+        # A single env is cheapest in-process, while multiple envs are usually
+        # faster in subprocesses.
         vec_env = "dummy" if n_envs == 1 else "subproc"
 
     model_path = run_dir / f"model_env{n_envs}_run{repeat}"
@@ -192,13 +201,14 @@ def benchmark_command(
 
 
 def run_single_benchmark(args, run_dir: Path, n_envs: int, repeat: int) -> RunResult:
+    """Run one benchmarked training process and collect timing data."""
     run_name = f"env{n_envs}_run{repeat}"
     log_path = run_dir / f"{run_name}.log"
     before_load = wait_for_reasonable_load(args)
     command = benchmark_command(args, run_dir, n_envs, repeat)
 
     print(
-        f"Spoustim benchmark {run_name}: "
+        f"Starting benchmark {run_name}: "
         f"n_envs={n_envs}, timesteps={args.timesteps}, "
         f"vec_env={command[command.index('--vec-env') + 1]}, device={args.device}"
     )
@@ -217,7 +227,7 @@ def run_single_benchmark(args, run_dir: Path, n_envs: int, repeat: int) -> RunRe
         output = (exc.stdout or "") + (exc.stderr or "")
         log_path.write_text(output, encoding="utf-8")
         raise RuntimeError(
-            f"Benchmark {run_name} selhal. Viz log {log_path}"
+            f"Benchmark {run_name} failed. See log {log_path}"
         ) from exc
 
     elapsed = time.perf_counter() - start
@@ -226,10 +236,12 @@ def run_single_benchmark(args, run_dir: Path, n_envs: int, repeat: int) -> RunRe
 
     logged_fps_matches = FPS_PATTERN.findall(output)
     last_logged_fps = float(logged_fps_matches[-1]) if logged_fps_matches else None
+    # Wall-clock throughput is the main metric because it includes process
+    # overhead, environment stepping, and model updates together.
     steps_per_second = args.timesteps / elapsed
 
     print(
-        f"Hotovo {run_name}: elapsed={elapsed:.1f}s, "
+        f"Finished {run_name}: elapsed={elapsed:.1f}s, "
         f"measured_steps_per_sec={steps_per_second:.1f}, "
         f"last_logged_fps={last_logged_fps if last_logged_fps is not None else 'n/a'}"
     )
@@ -250,6 +262,7 @@ def run_single_benchmark(args, run_dir: Path, n_envs: int, repeat: int) -> RunRe
 
 
 def cleanup_run_artifacts(run_dir: Path, n_envs: int, repeat: int) -> None:
+    """Remove per-run artifacts so benchmark runs do not fill the disk."""
     model_base = run_dir / f"model_env{n_envs}_run{repeat}"
     replay_path = run_dir / f"model_env{n_envs}_run{repeat}_replay.pkl"
     checkpoint_dir = run_dir / f"checkpoints_env{n_envs}_run{repeat}"
@@ -263,6 +276,7 @@ def cleanup_run_artifacts(run_dir: Path, n_envs: int, repeat: int) -> None:
 
 
 def summarize(results: list[RunResult]) -> None:
+    """Print aggregate metrics and recommend the fastest tested configuration."""
     grouped: dict[int, list[RunResult]] = {}
     for result in results:
         grouped.setdefault(result.n_envs, []).append(result)
@@ -293,20 +307,24 @@ def summarize(results: list[RunResult]) -> None:
     best_steps, best_n_envs = max(ranking, key=lambda item: item[0])
     print()
     print(
-        f"Doporucena konfigurace: N_ENVS={best_n_envs} "
+        f"Recommended configuration: N_ENVS={best_n_envs} "
         f"(median_steps_per_sec={best_steps:.1f})"
     )
-    print("Tip: pokud na stroji bezne bezi i dalsi tezke ulohy, ber jako druhou volbu o 1 nizsi N_ENVS.")
+    print(
+        "Tip: if the machine is usually busy with other heavy workloads too, "
+        "consider one lower N_ENVS value as the second-best option."
+    )
 
 
 def main():
+    """Run the full benchmark matrix and print a final recommendation."""
     args = parse_args()
     run_dir = args.benchmark_dir
     run_dir.mkdir(parents=True, exist_ok=True)
 
     print(
-        "Benchmark budu merit pres wall-clock cas a load average. "
-        "Nesaham na hlavni model ani replay buffer."
+        "Benchmarking via wall-clock time and load average. "
+        "The main model and replay buffer are left untouched."
     )
     print(
         f"CPU cores={cpu_count()}, configs={args.configs}, repeats={args.repeats}, "
@@ -322,6 +340,8 @@ def main():
                 repeat != args.repeats
                 or n_envs != args.configs[-1]
             ) and args.cooldown_seconds > 0:
+                # Cooling down between runs makes the later measurements less
+                # biased by thermal throttling or leftover system load.
                 print(f"Cooldown {args.cooldown_seconds}s...")
                 time.sleep(args.cooldown_seconds)
 

@@ -1,4 +1,4 @@
-"""Prubezny DQN trening pro Space Invaders se schopnosti navazat."""
+"""Train or continue a DQN agent for the Space Invaders environment."""
 
 import argparse
 from datetime import datetime
@@ -14,18 +14,19 @@ from .env import SpaceInvadersEnv
 
 
 def parse_args():
+    """Parse CLI options for a resumable training run."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--timesteps",
         type=int,
         default=1_000_000,
-        help="Pocet dalsich kroku, ktere se maji natrenovat v tomto behu.",
+        help="Number of additional timesteps to train in this run.",
     )
     parser.add_argument(
         "--max-steps",
         type=int,
         default=20_000,
-        help="Limit kroku jedne epizody pri treningu.",
+        help="Maximum number of steps per training episode.",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -73,24 +74,27 @@ def parse_args():
     parser.add_argument(
         "--fresh-start",
         action="store_true",
-        help="Ignoruje existujici model a zacne trenink od nuly.",
+        help="Ignore any existing model and start training from scratch.",
     )
     parser.add_argument(
         "--reset-replay-buffer",
         action="store_true",
-        help="Nacte existujici model, ale ignoruje ulozeny replay buffer.",
+        help="Load the existing model but ignore the saved replay buffer.",
     )
     return parser.parse_args()
 
 
 def ensure_zip_suffix(path: Path) -> Path:
+    """Normalize model paths so Stable-Baselines always saves a .zip file."""
     return path if path.suffix == ".zip" else path.with_suffix(".zip")
 
 
 def resolve_device(device_name: str) -> str:
+    """Resolve the requested training device, falling back from auto mode."""
     if device_name != "auto":
         return device_name
 
+    # Prefer Apple Metal on supported Macs, then CUDA, then plain CPU.
     if torch.backends.mps.is_available():
         return "mps"
 
@@ -101,7 +105,9 @@ def resolve_device(device_name: str) -> str:
 
 
 def build_env(args):
+    """Create the vectorized training environment from CLI settings."""
     vec_env_cls = DummyVecEnv if args.vec_env == "dummy" else SubprocVecEnv
+    # "spawn" is the safest start method across macOS and Windows subprocess envs.
     vec_env_kwargs = {"start_method": "spawn"} if args.vec_env == "subproc" else None
     return make_vec_env(
         SpaceInvadersEnv,
@@ -118,6 +124,7 @@ def build_env(args):
 
 
 def build_new_model(args, env, resolved_device: str):
+    """Construct a fresh DQN model with the current hyperparameter set."""
     return DQN(
         "MlpPolicy",
         env,
@@ -140,14 +147,20 @@ def build_new_model(args, env, resolved_device: str):
 
 
 def main():
+    """Run one training session and persist both the model and replay buffer."""
     args = parse_args()
     model_path = ensure_zip_suffix(args.model_path)
     resolved_device = resolve_device(args.device)
+
+    # Create output directories up front so later save operations cannot fail
+    # just because the path tree does not exist yet.
     args.replay_buffer_path.parent.mkdir(parents=True, exist_ok=True)
     args.tensorboard_log.mkdir(parents=True, exist_ok=True)
     args.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     if not args.skip_check_env:
+        # Validate a single non-vectorized env once before training. This catches
+        # Gym API mistakes early without paying the cost every rollout.
         validation_env = SpaceInvadersEnv(max_steps=args.max_steps)
         try:
             check_env(validation_env, warn=True)
@@ -156,7 +169,7 @@ def main():
 
     env = build_env(args)
     print(
-        "Konfigurace treningu:"
+        "Training configuration:"
         f" device={resolved_device}, n_envs={args.n_envs},"
         f" vec_env={args.vec_env}, timesteps={args.timesteps},"
         f" max_steps={args.max_steps}"
@@ -165,7 +178,9 @@ def main():
     try:
         should_resume = model_path.exists() and not args.fresh_start
         if should_resume:
-            print(f"Nacitam existujici model z {model_path}")
+            # Resume weights from the latest saved model unless the user
+            # explicitly requested a clean restart.
+            print(f"Loading existing model from {model_path}")
             model = DQN.load(
                 str(model_path),
                 env=env,
@@ -174,26 +189,32 @@ def main():
             )
 
             if args.reset_replay_buffer:
-                print("Replay buffer byl zamerne preskocen (--reset-replay-buffer).")
+                print("Replay buffer was intentionally skipped (--reset-replay-buffer).")
             elif args.replay_buffer_path.exists():
-                print(f"Nacitam replay buffer z {args.replay_buffer_path}")
+                print(f"Loading replay buffer from {args.replay_buffer_path}")
                 try:
+                    # Restoring the replay buffer lets the optimizer keep learning
+                    # from previously collected experience instead of warming up again.
                     model.load_replay_buffer(str(args.replay_buffer_path))
                 except Exception as exc:
                     print(
-                        "Replay buffer se nepodarilo nacist "
-                        f"(pravdepodobne jina konfigurace envu): {exc}"
+                        "Replay buffer could not be loaded "
+                        f"(likely because the env configuration changed): {exc}"
                     )
-                    print("Pokračuji bez nacteneho replay bufferu.")
+                    print("Continuing without a loaded replay buffer.")
             else:
-                print("Replay buffer nebyl nalezen, pokracuji bez nej.")
+                print("Replay buffer was not found, continuing without it.")
 
+            # Keep the global timestep counter increasing across resumed runs so
+            # TensorBoard and exploration schedules reflect the full training history.
             reset_num_timesteps = False
         else:
-            print("Zacinam novy trening od nuly.")
+            print("Starting a new training run from scratch.")
             model = build_new_model(args, env, resolved_device)
             reset_num_timesteps = True
 
+        # Train for one additional chunk of timesteps. The shell scripts can call
+        # this repeatedly to build up multi-hour or multi-day training runs.
         model.learn(
             total_timesteps=args.timesteps,
             log_interval=10,
@@ -204,6 +225,8 @@ def main():
         model.save(str(model_path))
         model.save_replay_buffer(str(args.replay_buffer_path))
 
+        # Save timestamped checkpoints as immutable recovery points in case the
+        # next training cycle regresses or a long run gets interrupted later.
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         checkpoint_model = args.checkpoint_dir / f"space_invaders_dqn_{stamp}"
         checkpoint_buffer = (
@@ -212,14 +235,15 @@ def main():
         model.save(str(checkpoint_model))
         model.save_replay_buffer(str(checkpoint_buffer))
 
-        print(f"Model ulozen do {model_path}")
-        print(f"Replay buffer ulozen do {args.replay_buffer_path}")
-        print(f"Checkpoint ulozen do {checkpoint_model}.zip")
+        print(f"Model saved to {model_path}")
+        print(f"Replay buffer saved to {args.replay_buffer_path}")
+        print(f"Checkpoint saved to {checkpoint_model}.zip")
     finally:
         try:
             env.close()
         except EOFError:
-            print("Env workers uz byly ukonceny, preskakuji dodatecne close().")
+            # Subprocess workers may already be gone after an earlier failure.
+            print("Env workers are already closed, skipping the extra close().")
 
 
 if __name__ == "__main__":
